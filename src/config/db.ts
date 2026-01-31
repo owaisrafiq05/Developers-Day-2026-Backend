@@ -1,20 +1,29 @@
-import { Pool } from "pg";
+import { PrismaClient } from '@prisma/client';
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+// Use pooled connection for runtime operations
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL,
+    },
+  },
 });
 
 const connectDB = async () => {
   try {
-    await pool.connect();
-    console.log("[database]: Connected to Supabase Postgres successfully");
+    await prisma.$connect();
+    console.log("[database]: Connected to Supabase Postgres via Prisma successfully");
   } catch (error) {
-    console.error("[database]: Connection failed", error);
+    console.error("[database]: Prisma connection failed", error);
     process.exit(1);
   }
 };
 
-export { pool, connectDB };
+const disconnectDB = async () => {
+  await prisma.$disconnect();
+};
+
+export { prisma, connectDB, disconnectDB };

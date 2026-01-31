@@ -1,22 +1,288 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
+//Enums
+enum AppRole {
+  PARTICIPANT
+  STAFF
+  ADMIN
+  TREASURER
+  PR
+  GR
+  FOODFEST
+}
+
+enum RegistrationStatus {
+  PENDING_PAYMENT
+  VERIFIED
+  REJECTED
+}
+
+enum AttendanceMethod {
+  SELF_GEOFENCE
+  STAFF_QR
+  STAFF_SOFT_MARK
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  EASYPAISA
+  JAZZCASH
+  CARD
+  CASH
+}
+
+
+// USER (Auth / System Identity)
 model User {
   id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?  
+  email     String   @unique @db.VarChar(255)
+  password  String?  @db.VarChar(255)
+  role      AppRole  @default(PARTICIPANT)
+  
+  isActive  Boolean  @default(true)
+  lastLogin DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  staffProfile      StaffProfile?
+  participant       Participant?
+  company           Company?
+  foodStall         FoodStall?
+  brandAmbassador   BrandAmbassador?
+
+  @@index([email])
+  @@index([role])
+}
+
+//PARTICIPANTS (Global Human Profile)
+model Participant {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  cnic      String   @unique @db.VarChar(15)
+  email     String   @unique @db.VarChar(255)
+  fullName  String   @db.VarChar(100)
+  phone     String?  @db.VarChar(20)
+  institution String? @db.VarChar(200)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teamMembers        TeamMember[]
+  competitionAttendances CompetitionAttendance[]
+
+  @@index([cnic])
+  @@index([email])
+}
+
+//Competitions
+model Competition {
+  id             String   @id @default(uuid())
+  name           String   @db.VarChar(100)
+  description    String?  @db.Text
+  venueId        String?
+  venue          Venue?   @relation(fields: [venueId], references: [id])
+
+  fee            Decimal  @default(0) @db.Decimal(10,2)
+  minTeamSize    Int      @default(1)
+  maxTeamSize    Int
+  capacityLimit  Int
+
+  compDay        DateTime @db.Date
+  startTime      DateTime
+  endTime        DateTime
+
+  isActive       Boolean  @default(true)
+  registrationDeadline DateTime?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  teams          Team[]
+
+  @@index([compDay])
+  @@index([isActive])
+}
+
+//Teams (Registration Instance)
+model Team {
+  id              String   @id @default(uuid())
+  competitionId   String
+  competition     Competition @relation(fields: [competitionId], references: [id])
+
+  name            String   @db.VarChar(100)
+  referenceId     String   @unique @db.VarChar(50)
+
+  paymentStatus   RegistrationStatus @default(PENDING_PAYMENT)
+  paymentProofUrl String?  @db.VarChar(500)
+  paymentMethod   PaymentMethod?
+  paymentDate     DateTime?
+  declaredTID     String?  @db.VarChar(100)
+  amountPaid      Decimal? @db.Decimal(10,2)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  members         TeamMember[]
+  attendance      CompetitionAttendance[]
+
+  @@index([competitionId])
+  @@index([paymentStatus])
+  @@index([referenceId])
+}
+
+//Team Members (Junction)
+model TeamMember {
+  id            String   @id @default(uuid())
+  teamId        String
+  participantId String
+
+  team           Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  isLeader      Boolean @default(false)
+  joinedAt      DateTime @default(now())
+
+  cardIssued    Boolean @default(false)
+  cardIssuedAt  DateTime?
+
+  @@unique([teamId, participantId])
+  @@index([teamId])
+  @@index([participantId])
+}
+
+//attendance
+model CompetitionAttendance {
+  id            String   @id @default(uuid())
+  teamId        String
+  participantId String
+
+  team           Team        @relation(fields: [teamId], references: [id])
+  participant    Participant @relation(fields: [participantId], references: [id])
+
+  status        Boolean  @default(true)
+  method        AttendanceMethod
+  markedBy      String?  @db.VarChar(100)
+  markedAt      DateTime @default(now())
+  
+  notes         String?  @db.Text
+
+  @@unique([teamId, participantId])
+  @@index([teamId])
+  @@index([participantId])
+  @@index([markedAt])
+}
+
+// staff / admin profile 
+model StaffProfile {
+  id          String   @id
+  user        User     @relation(fields: [id], references: [id], onDelete: Cascade)
+
+  fullName    String   @db.VarChar(100)
+  nuId        String   @unique @db.VarChar(20)
+  role        AppRole  @default(STAFF)
+
+  isApproved  Boolean  @default(false)
+  approvedAt  DateTime?
+  assignedBooth String? @db.VarChar(50)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([nuId])
+  @@index([isApproved])
+}
+
+//companies
+model Company {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String   @db.VarChar(200)
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  description String?  @db.Text
+  website     String?  @db.VarChar(255)
+  contactEmail String? @db.VarChar(255)
+  contactPhone String? @db.VarChar(20)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([categoryId])
+}
+
+//food stalls
+model FoodStall {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  stallName   String   @db.VarChar(100)
+  menuDetails String?  @db.Text
+  paymentStatus RegistrationStatus @default(PENDING_PAYMENT)
+  stallLocation String? @db.VarChar(100)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([paymentStatus])
+}
+
+//brand ambassadors
+model BrandAmbassador {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  fullName  String   @db.VarChar(100)
+  institute String   @db.VarChar(200)
+  referralCode String @unique @db.VarChar(20)
+  
+  totalReferrals Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([referralCode])
+}
+
+//categories
+model Category {
+  id        String   @id @default(uuid())
+  name      String   @unique @db.VarChar(100)
+  description String? @db.Text
+
+  companies Company[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+//venue
+model Venue {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(100)
+  location  String?  @db.VarChar(200)
+  capacity  Int?
+  facilities String? @db.Text
+
+  competitions Competition[]
+  
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

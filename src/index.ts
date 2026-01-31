@@ -7,13 +7,37 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // Connect to Database
-import { connectDB } from "./config/db";
+import { connectDB, disconnectDB, prisma } from "./config/db";
 connectDB();
 
 app.use(express.json());
 
-app.get("/", (req: Request, res: Response) => {
+app.get("/", (_req: Request, res: Response) => {
   res.send("Express + TypeScript Server");
+});
+
+// Example route to test Prisma
+app.get("/users", async (_req: Request, res: Response) => {
+  try {
+    const users = await prisma.user.findMany();
+    res.json(users);
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('Shutting down gracefully...');
+  await disconnectDB();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('Shutting down gracefully...');
+  await disconnectDB();
+  process.exit(0);
 });
 
 app.listen(port, () => {
