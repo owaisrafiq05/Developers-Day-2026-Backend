@@ -1,8 +1,84 @@
 import { Request, Response } from 'express'
 import { prisma } from '../config/db'
-import { supabaseAdmin } from '../config/supabase'
+import { supabaseAdmin, supabasePublic } from '../config/supabase'
 import { deriveNuId } from '../utils/nuId'
 import { StaffRole, UserType } from '@prisma/client'
+
+// for login
+
+export async function loginUser(req: Request, res: Response): Promise<void> {
+    const { email, password } = req.body as { email: string; password: string }
+
+    const { data, error } = await supabasePublic.auth.signInWithPassword({ email, password })
+
+    if (error || !data.session || !data.user) {
+        const isInvalid =
+            error?.message?.toLowerCase().includes('invalid') ||
+            error?.message?.toLowerCase().includes('credentials')
+
+        res.status(isInvalid ? 401 : 500).json({
+            success: false,
+            message: isInvalid
+                ? 'Invalid email or password.'
+                : (error?.message ?? 'Login failed. Please try again.'),
+        })
+        return
+    }
+
+    const { session, user: supabaseUser } = data
+
+    // fetch matching prisma User + StaffProfile
+    const prismaUser = await prisma.user.findUnique({
+        where: { id: supabaseUser.id },
+        include: { staffProfile: true },
+    })
+
+    if (!prismaUser) {
+        res.status(404).json({ success: false, message: 'No account found for this user.' })
+        return
+    }
+
+    if (!prismaUser.isActive) {
+        res.status(403).json({ success: false, message: 'Your account has been deactivated.' })
+        return
+    }
+
+    // if (prismaUser.staffProfile && !prismaUser.staffProfile.isApproved) {
+    //     res.status(403).json({
+    //         success: false,
+    //         message: 'Your account is pending admin approval.',
+    //     })
+    //     return
+    // }
+
+    // update lastLogin timestamp
+    await prisma.user.update({
+        where: { id: prismaUser.id },
+        data: { lastLogin: new Date() },
+    })
+
+    // return session tokens + profile
+    res.status(200).json({
+        success: true,
+        message: 'Login successful.',
+        data: {
+            accessToken:  session.access_token,
+            refreshToken: session.refresh_token,
+            expiresIn:    session.expires_in,
+            user: {
+                id:         prismaUser.id,
+                email:      prismaUser.email,
+                type:       prismaUser.type,
+                nuId:       prismaUser.staffProfile?.nuId       ?? null,
+                fullName:   prismaUser.staffProfile?.fullName   ?? null,
+                staffRole:  prismaUser.staffProfile?.staffRole  ?? null,
+                isApproved: prismaUser.staffProfile?.isApproved ?? null,
+            },
+        },
+    })
+}
+
+// for register
 
 // Maps frontend role strings to Prisma StaffRole enum values
 const ROLE_MAP: Record<string, StaffRole> = {
