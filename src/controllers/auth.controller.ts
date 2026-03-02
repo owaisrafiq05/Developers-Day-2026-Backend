@@ -4,8 +4,26 @@ import { supabaseAdmin, supabasePublic } from '../config/supabase'
 import { deriveNuId } from '../utils/nuId'
 import { StaffRole, UserType } from '@prisma/client'
 
-// for login
+//for logout
+export async function logoutUser(req: Request, res: Response): Promise<void> {
+    const authHeader = req.headers.authorization ?? ''
+    const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
 
+    if (!jwt) {
+        res.status(400).json({ success: false, message: 'No access token provided.' })
+        return
+    }
+
+    const { error } = await supabaseAdmin.auth.admin.signOut(jwt, 'global')
+
+    if (error) {
+        console.error('[logout] Supabase signOut error:', error.message)
+    }
+
+    res.status(200).json({ success: true, message: 'Logged out successfully.' })
+}
+
+// for login
 export async function loginUser(req: Request, res: Response): Promise<void> {
     const { email, password } = req.body as { email: string; password: string }
 

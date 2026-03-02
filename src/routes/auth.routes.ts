@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { validate } from '../middleware/validate'
-import { registerStaff, loginUser } from '../controllers/auth.controller'
+import { registerStaff, loginUser, logoutUser } from '../controllers/auth.controller'
 
 const router = Router()
 
@@ -40,5 +40,8 @@ const loginSchema = z.object({
 
 // POST /auth/login
 router.post('/login', validate(loginSchema), loginUser)
+
+// POST /auth/logout
+router.post('/logout', logoutUser)
 
 export default router
