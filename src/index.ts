@@ -13,11 +13,32 @@ connectDB();
 
 const frontendOrigin = process.env.FRONTEND_ORIGIN || process.env.FRONTEND_URL;
 
-app.use(
-  cors({
-    origin: frontendOrigin || "*",
-  })
-);
+const allowedOrigins: string[] = [];
+if (frontendOrigin) {
+  frontendOrigin
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean)
+    .forEach((o) => allowedOrigins.push(o));
+}
+// Allow localhost for local development
+allowedOrigins.push("http://localhost:3000", "http://127.0.0.1:3000");
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g. Postman, server-to-server)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow any origin when FRONTEND_URL is not set (dev fallback)
+    if (!frontendOrigin) return callback(null, true);
+    callback(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+};
+
+app.use(cors(corsOptions));
 
 app.use(express.json());
 
