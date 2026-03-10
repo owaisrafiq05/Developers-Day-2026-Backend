@@ -1,8 +1,10 @@
 import { Router } from 'express'
-import { createPublicRegistration } from '../controllers/webRegistration.controller'
+import { createPublicRegistration, listPublicRegistrations } from '../controllers/webRegistration.controller'
 import { parsePaymentScreenshot, uploadPaymentProof } from '../middleware/uploadPaymentProof'
 
 const router = Router()
+
+router.get('/', listPublicRegistrations)
 
 router.post(
     '/',

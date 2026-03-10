@@ -1,4 +1,4 @@
-import { Response } from 'express'
+import { Request, Response } from 'express'
 import { prisma } from '../config/db'
 import { z } from 'zod'
 import { RegistrationStatus } from '@prisma/client'
@@ -23,6 +23,10 @@ const publicRegistrationSchema = z.object({
     leaderInstitution:z.string().optional().default(''),
     members:          z.string().optional().default(''),
 })
+
+function normalizeCnic(value: string): string {
+    return value.replace(/\D/g, '')
+}
 
 function parseMembers(raw: string | undefined): z.infer<typeof publicMemberSchema>[] {
     if (!raw) return []
@@ -81,9 +85,34 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
 
     const extraMembers = parseMembers(membersRaw)
 
+    const allCnics = [
+        normalizeCnic(leaderCnic),
+        ...extraMembers.map((m) => normalizeCnic(m.cnic)),
+    ]
+
+    if (allCnics.length !== new Set(allCnics).size) {
+        res.status(400).json({
+            success: false,
+            message: 'Duplicate CNIC in team members. Each participant must have a unique CNIC.',
+        })
+        return
+    }
+
+    const allEmails = [
+        leaderEmail.trim().toLowerCase(),
+        ...extraMembers.map((m) => m.email.trim().toLowerCase()),
+    ]
+    if (allEmails.length !== new Set(allEmails).size) {
+        res.status(400).json({
+            success: false,
+            message: 'Duplicate email in team members. Each participant must have a unique email.',
+        })
+        return
+    }
+
     const competition = await prisma.competition.findUnique({
         where: { id: competitionId },
-        select: { id: true },
+        select: { id: true, minTeamSize: true, maxTeamSize: true },
     })
 
     if (!competition) {
@@ -91,17 +120,65 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
         return
     }
 
+    const totalMembers = 1 + extraMembers.length
+    if (totalMembers < competition.minTeamSize || totalMembers > competition.maxTeamSize) {
+        res.status(400).json({
+            success: false,
+            message: `Team must have ${competition.minTeamSize}–${competition.maxTeamSize} members for this competition.`,
+        })
+        return
+    }
+
+    const existingInCompetition = await prisma.teamMember.findMany({
+        where: {
+            team: { competitionId },
+            participant: { cnic: { in: allCnics } },
+        },
+        select: {
+            participant: { select: { fullName: true, cnic: true } },
+        },
+    })
+
+    if (existingInCompetition.length > 0) {
+        const names = existingInCompetition.map((r) => r.participant.fullName).join(', ')
+        res.status(409).json({
+            success: false,
+            message: `One or more team members are already registered for this competition: ${names}`,
+        })
+        return
+    }
+
+    const refToUse = referenceCode?.trim() || ''
+    if (refToUse) {
+        const existingRef = await prisma.team.findUnique({
+            where: { referenceId: refToUse },
+        })
+        if (existingRef) {
+            res.status(409).json({
+                success: false,
+                message: 'Reference code already in use. Leave it empty for auto-generation.',
+            })
+            return
+        }
+    }
+
     try {
         const result = await prisma.$transaction(async (tx) => {
-            const allMembers: z.infer<typeof publicMemberSchema>[] = [
+            const allMembers = [
                 {
-                    fullName:    leaderFullName,
-                    email:       leaderEmail,
-                    cnic:        leaderCnic,
-                    phone:       leaderPhone,
-                    institution: leaderInstitution,
+                    fullName:    leaderFullName.trim(),
+                    email:       leaderEmail.trim().toLowerCase(),
+                    cnic:        normalizeCnic(leaderCnic),
+                    phone:       (leaderPhone || '').trim(),
+                    institution: (leaderInstitution || '').trim(),
                 },
-                ...extraMembers,
+                ...extraMembers.map((m) => ({
+                    fullName:    m.fullName.trim(),
+                    email:       m.email.trim().toLowerCase(),
+                    cnic:        normalizeCnic(m.cnic),
+                    phone:       (m.phone || '').trim(),
+                    institution: (m.institution || '').trim(),
+                })),
             ]
 
             const participantIds: { participantId: string; isLeader: boolean }[] = []
@@ -126,13 +203,20 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
                         include: { user: true },
                     })
                 } else {
-                    let user = await tx.user.findUnique({ where: { email: m.email } })
+                    const existingUser = await tx.user.findUnique({
+                        where: { email: m.email },
+                        include: { participant: true },
+                    })
 
-                    if (!user) {
-                        user = await tx.user.create({
-                            data: { email: m.email, type: 'PARTICIPANT' },
-                        })
+                    if (existingUser?.participant) {
+                        const err = new Error(`EMAIL_TAKEN:${m.email}`) as Error & { code: string }
+                        err.code = 'EMAIL_TAKEN'
+                        throw err
                     }
+
+                    const user = existingUser ?? await tx.user.create({
+                        data: { email: m.email, type: 'PARTICIPANT' },
+                    })
 
                     participant = await tx.participant.create({
                         data: {
@@ -150,7 +234,7 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
                 participantIds.push({ participantId: participant.id, isLeader })
             }
 
-            const referenceId = referenceCode || generateReferenceId()
+            const referenceId = refToUse || generateReferenceId()
 
             const team = await tx.team.create({
                 data: {
@@ -173,7 +257,7 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
             })
 
             return team
-        })
+        }, { timeout: 20000 })
 
         res.status(201).json({
             success: true,
@@ -191,9 +275,56 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
                 memberCount:   result._count.members,
             },
         })
-    } catch (error) {
+    } catch (error: any) {
         console.error('[createPublicRegistration] Failed to create registration:', error)
-        res.status(500).json({ success: false, message: 'Failed to create registration.' })
+
+        if (error?.code === 'EMAIL_TAKEN' || error?.message?.startsWith('EMAIL_TAKEN:')) {
+            const email = error?.message?.split(':')[1] || 'this email'
+            res.status(400).json({
+                success: false,
+                message: `Email ${email} is already registered to another participant.`,
+            })
+            return
+        }
+
+        const prismaCode = error?.code as string
+        if (prismaCode === 'P2002') {
+            const target = (error?.meta?.target as string[]) || []
+            const field = target[0] || 'record'
+            res.status(409).json({
+                success: false,
+                message: `Duplicate entry: ${field} already exists.`,
+            })
+            return
+        }
+
+        const msg = error?.message || 'Failed to create registration.'
+        res.status(500).json({ success: false, message: msg })
     }
+}
+
+export async function listPublicRegistrations(_req: Request, res: Response): Promise<void> {
+    const teams = await prisma.team.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: {
+            competition: { select: { id: true, name: true, fee: true } },
+            _count: { select: { members: true } },
+        },
+        take: 50,
+    })
+
+    res.json({
+        success: true,
+        data: teams.map((t) => ({
+            id:            t.id,
+            teamName:      t.name,
+            referenceId:   t.referenceId,
+            paymentStatus: t.paymentStatus,
+            paymentProofUrl: t.paymentProofUrl,
+            competition:   t.competition,
+            memberCount:   t._count.members,
+            createdAt:     t.createdAt,
+        })),
+    })
 }
 
