@@ -169,6 +169,7 @@ model Team {
 
   paymentStatus   RegistrationStatus @default(PENDING_PAYMENT)
   paymentProofUrl String?  @db.VarChar(500)
+  isEarlyBird     Boolean  @default(false)
   paymentMethod   PaymentMethod?
   paymentDate     DateTime?
   declaredTID     String?  @db.VarChar(100)

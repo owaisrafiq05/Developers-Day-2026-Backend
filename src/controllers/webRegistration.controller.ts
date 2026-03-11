@@ -16,6 +16,7 @@ const publicRegistrationSchema = z.object({
     competitionId:    z.string().min(1, 'Competition ID is required'),
     teamName:         z.string().min(1, 'Team name is required'),
     referenceCode:    z.string().optional().default(''),
+    isEarlyBird:      z.enum(['true', 'false']).optional().default('false'),
     leaderFullName:   z.string().min(1, 'Leader name is required'),
     leaderEmail:      z.string().email('Leader email is invalid'),
     leaderCnic:       z.string().min(13, 'Leader CNIC must be at least 13 characters'),
@@ -75,6 +76,7 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
         competitionId,
         teamName,
         referenceCode,
+        isEarlyBird: isEarlyBirdRaw,
         leaderFullName,
         leaderEmail,
         leaderCnic,
@@ -82,6 +84,8 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
         leaderInstitution,
         members: membersRaw,
     } = parsed.data
+
+    const isEarlyBird = isEarlyBirdRaw === 'true'
 
     const extraMembers = parseMembers(membersRaw)
 
@@ -243,6 +247,7 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
                     referenceId,
                     paymentStatus:   RegistrationStatus.PENDING_PAYMENT,
                     paymentProofUrl: paymentProofUrl,
+                    isEarlyBird,
                     members: {
                         create: participantIds.map((p) => ({
                             participantId: p.participantId,
@@ -255,6 +260,20 @@ export async function createPublicRegistration(req: PaymentRequest, res: Respons
                     _count:      { select: { members: true } },
                 },
             })
+
+            if (isEarlyBird) {
+                await tx.$executeRaw`
+                    UPDATE "Competition"
+                    SET "earlyBirdLimit" = GREATEST("earlyBirdLimit" - 1, 0)
+                    WHERE "id" = ${competitionId}
+                `
+            } else {
+                await tx.$executeRaw`
+                    UPDATE "Competition"
+                    SET "capacityLimit" = GREATEST("capacityLimit" - 1, 0)
+                    WHERE "id" = ${competitionId}
+                `
+            }
 
             return team
         }, { timeout: 20000 })
