@@ -7,7 +7,7 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Connect to Database
+// Connect to Databas
 import { connectDB, disconnectDB, prisma } from "./config/db";
 connectDB();
 
