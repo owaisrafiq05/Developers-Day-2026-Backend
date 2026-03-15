@@ -152,6 +152,48 @@ export async function getRegistration(req: AuthRequest, res: Response): Promise<
     })
 }
 
+const paymentStatusUpdateSchema = z.object({
+    status: z.nativeEnum(RegistrationStatus),
+    note:   z.string().optional(),
+})
+
+export async function updateTeamPaymentStatus(req: AuthRequest, res: Response): Promise<void> {
+    const teamId = String(req.params.teamId)
+
+    const parsed = paymentStatusUpdateSchema.safeParse(req.body)
+    if (!parsed.success) {
+        res.status(400).json({ success: false, errors: parsed.error.issues })
+        return
+    }
+
+    const { status, note } = parsed.data
+
+    const team = await prisma.team.findUnique({ where: { id: teamId } })
+    if (!team) {
+        res.status(404).json({ success: false, message: 'Registration not found.' })
+        return
+    }
+
+    await prisma.$transaction(async (tx) => {
+        await tx.team.update({
+            where: { id: teamId },
+            data: { paymentStatus: status },
+        })
+
+        //transaction for note insert
+
+    })
+
+    res.json({
+        success: true,
+        data: {
+            id:            teamId,
+            paymentStatus: status,
+            note:          note || null,
+        },
+    })
+}
+
 //  GET /registrations/competitions-form
 
 export async function listCompetitionsForForm(_req: AuthRequest, res: Response): Promise<void> {
